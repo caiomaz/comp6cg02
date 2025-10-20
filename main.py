@@ -21,7 +21,7 @@ EGG_CLASSES = {
     'Ovo Passado': 'ovo-passado'
 }
 IMAGE_COUNT_PER_CLASS = 6
-IMAGE_EXTENSION = '.png'  # Assumindo que as imagens são .png
+IMAGE_EXTENSION = '.png'
 
 # --- Lógica de Processamento de Imagem ---
 
@@ -29,7 +29,7 @@ class ImageProcessor:
     """Classe responsável por operações de imagem."""
 
     @staticmethod
-    def get_average_hsv(image_path: str) -> np.ndarray | None:
+    def get_average_hsv(image_path: str):
         """
         Lê uma imagem e calcula a cor média no espaço de cores HSV.
 
@@ -62,6 +62,7 @@ class EggTrainer:
     def __init__(self, base_path: str):
         self.base_path = base_path
         self.color_patterns = {}
+        self.images_per_class = {}
 
     def train(self):
         """
@@ -82,10 +83,16 @@ class EggTrainer:
             if hsv_values:
                 # Calcula a média dos valores HSV para a classe
                 self.color_patterns[class_name] = np.mean(hsv_values, axis=0)
+                self.images_per_class[class_name] = len(hsv_values)
                 print(f"Classe '{class_name}' treinada com {len(hsv_values)} imagens.")
+            else:
+                self.images_per_class[class_name] = 0
         
         if not self.color_patterns:
-            raise RuntimeError("Treinamento falhou. Nenhuma imagem de treino foi encontrada ou processada.")
+            raise RuntimeError(
+                "Treinamento falhou. Nenhuma imagem de treino foi encontrada ou processada.\n"
+                f"Verifique se as imagens estão em: {os.path.abspath(self.base_path)}"
+            )
         
         print("Treinamento concluído.")
         return self.color_patterns
@@ -97,7 +104,7 @@ class EggClassifier:
     def __init__(self, color_patterns: dict):
         self.color_patterns = color_patterns
 
-    def classify(self, image_path: str) -> str | None:
+    def classify(self, image_path: str):
         """
         Classifica uma imagem com base na proximidade com os padrões de cor.
 
@@ -147,12 +154,145 @@ class ResultLogger:
             prediction: A classe prevista pelo classificador.
         """
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Converte para caminho relativo a partir da raiz do projeto
+        try:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            rel_path = os.path.relpath(image_path, project_root)
+        except ValueError:
+            # Em Windows, se estiver em drives diferentes, usa caminho absoluto
+            rel_path = image_path
+        
         with open(self.filepath, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow([timestamp, image_path, prediction])
+            writer.writerow([timestamp, rel_path, prediction])
+    
+    def read_all(self):
+        """
+        Lê todos os registros do arquivo CSV.
+        
+        Returns:
+            Uma lista de listas contendo os dados do CSV.
+        """
+        if not os.path.exists(self.filepath):
+            return []
+        
+        with open(self.filepath, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            return list(reader)
 
 
 # --- Interface Gráfica ---
+
+class ResultsViewer(tk.Toplevel):
+    """Janela separada para visualizar os resultados do CSV."""
+    
+    def __init__(self, parent, logger: ResultLogger):
+        super().__init__(parent)
+        self.logger = logger
+        
+        self.title("Histórico de Resultados")
+        self.geometry("900x450")
+        self.configure(bg="#ffffff")
+        
+        self._create_widgets()
+        self._load_data()
+    
+    def _create_widgets(self):
+        """Cria os componentes visuais da janela de resultados."""
+        # Estilo minimalista
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        style.configure("Treeview", 
+                       background="#ffffff",
+                       foreground="#333333",
+                       rowheight=28,
+                       fieldbackground="#ffffff",
+                       borderwidth=0)
+        style.configure("Treeview.Heading",
+                       background="#f5f5f5",
+                       foreground="#333333",
+                       relief="flat",
+                       font=("Segoe UI", 10, "bold"))
+        style.map("Treeview", background=[("selected", "#e3f2fd")])
+        
+        # Frame principal
+        main_frame = ttk.Frame(self, padding="20")
+        main_frame.pack(expand=True, fill="both")
+        
+        # Título
+        title_label = ttk.Label(
+            main_frame,
+            text="Histórico de Classificações",
+            font=("Segoe UI", 16, "bold"),
+            foreground="#1976D2",
+            background="#ffffff"
+        )
+        title_label.pack(pady=(0, 15))
+        
+        # Frame para a tabela com scrollbar
+        table_frame = ttk.Frame(main_frame)
+        table_frame.pack(expand=True, fill="both")
+        
+        # Scrollbars
+        vsb = ttk.Scrollbar(table_frame, orient="vertical")
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal")
+        
+        # Treeview (tabela)
+        self.tree = ttk.Treeview(
+            table_frame,
+            columns=("Data", "Caminho", "Resultado"),
+            show="headings",
+            yscrollcommand=vsb.set,
+            xscrollcommand=hsb.set,
+            selectmode="browse"
+        )
+        
+        vsb.config(command=self.tree.yview)
+        hsb.config(command=self.tree.xview)
+        
+        # Configuração das colunas
+        self.tree.heading("Data", text="Data/Hora")
+        self.tree.heading("Caminho", text="Caminho da Imagem")
+        self.tree.heading("Resultado", text="Resultado")
+        
+        self.tree.column("Data", width=180, anchor="center")
+        self.tree.column("Caminho", width=500, anchor="w")
+        self.tree.column("Resultado", width=180, anchor="center")
+        
+        # Posicionamento
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+        
+        # Botão fechar
+        close_btn = ttk.Button(
+            main_frame,
+            text="Fechar",
+            command=self.destroy
+        )
+        close_btn.pack(pady=(15, 0))
+    
+    def _load_data(self):
+        """Carrega os dados do CSV na tabela."""
+        data = self.logger.read_all()
+        
+        # Limpa a tabela
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # Adiciona os dados (pula o cabeçalho)
+        if len(data) > 1:
+            for row in data[1:]:
+                if len(row) == 3:
+                    self.tree.insert("", "end", values=row)
+        else:
+            # Adiciona mensagem se não houver dados
+            self.tree.insert("", "end", values=("—", "Nenhum resultado ainda", "—"))
+
 
 class Application(tk.Tk):
     """Classe principal da aplicação com interface gráfica."""
@@ -162,79 +302,144 @@ class Application(tk.Tk):
         self.trainer = trainer
         self.classifier = classifier
         self.logger = logger
+        self.current_image_ref = None  # Mantém referência da imagem
 
-        self.title("Analisador de Cozimento de Ovos")
-        self.geometry("600x550")
-        self.configure(bg="#f0f0f0")
+        self.title("Analisador de Ovos")
+        self.geometry("520x500")
+        self.configure(bg="#ffffff")
+        self.resizable(False, False)
 
         self._create_widgets()
 
     def _create_widgets(self):
         """Cria os componentes visuais da interface."""
+        # Configuração de estilo minimalista
         style = ttk.Style(self)
-        style.configure("TFrame", background="#f0f0f0")
-        style.configure("TLabel", background="#f0f0f0", font=("Helvetica", 10))
-        style.configure("Header.TLabel", font=("Helvetica", 14, "bold"))
-        style.configure("TButton", font=("Helvetica", 10), padding=5)
-
-        main_frame = ttk.Frame(self, padding="20")
+        style.theme_use('clam')
+        
+        style.configure("TFrame", background="#ffffff")
+        style.configure("TLabel", background="#ffffff", font=("Segoe UI", 9), foreground="#555555")
+        style.configure("Info.TLabel", background="#ffffff", font=("Segoe UI", 9), foreground="#777777")
+        style.configure("Result.TLabel", font=("Segoe UI", 16, "bold"), foreground="#2196F3", background="#ffffff")
+        style.configure("TButton", font=("Segoe UI", 10), padding=12)
+        
+        # Container principal
+        main_frame = ttk.Frame(self, padding="25")
         main_frame.pack(expand=True, fill="both")
 
-        # --- Seção de Informações do Treino ---
-        train_info_frame = ttk.LabelFrame(main_frame, text="Informações do Treinamento", padding="15")
-        train_info_frame.pack(fill="x", pady=(0, 20))
+        # Título
+        title = ttk.Label(
+            main_frame,
+            text="🥚 Analisador de Ovos",
+            font=("Segoe UI", 20, "bold"),
+            foreground="#1976D2",
+            background="#ffffff"
+        )
+        title.pack(pady=(0, 25))
 
-        ttk.Label(train_info_frame, text=f"Imagens por classe: {IMAGE_COUNT_PER_CLASS}").pack(anchor="w")
-        ttk.Label(train_info_frame, text="Padrões de Cor (HSV Médio):").pack(anchor="w", pady=(10, 5))
+        # --- Informações do Treino (compacto) ---
+        info_text = f"Modelo treinado com {IMAGE_COUNT_PER_CLASS} imagens por classe"
+        info_label = ttk.Label(main_frame, text=info_text, style="Info.TLabel")
+        info_label.pack(pady=(0, 5))
+        
+        classes_text = f"Classes: {', '.join(EGG_CLASSES.keys())}"
+        classes_label = ttk.Label(main_frame, text=classes_text, style="Info.TLabel")
+        classes_label.pack(pady=(0, 25))
 
-        for class_name, hsv in self.trainer.color_patterns.items():
-            h, s, v = hsv
-            info = f"- {class_name}: H={h:.1f}, S={s:.1f}, V={v:.1f}"
-            ttk.Label(train_info_frame, text=info).pack(anchor="w")
+        # --- Área de Imagem (com tamanho fixo) ---
+        self.image_frame = tk.Frame(
+            main_frame,
+            bg="#f9f9f9",
+            highlightbackground="#e0e0e0",
+            highlightthickness=1,
+            width=220,
+            height=220
+        )
+        self.image_frame.pack(pady=(0, 20))
+        self.image_frame.pack_propagate(False)  # Mantém tamanho fixo
+        
+        self.image_label = tk.Label(
+            self.image_frame,
+            text="Nenhuma imagem\ncarregada",
+            font=("Segoe UI", 10),
+            fg="#999999",
+            bg="#f9f9f9"
+        )
+        self.image_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        # --- Seção de Teste ---
-        test_frame = ttk.LabelFrame(main_frame, text="Analisar Nova Imagem", padding="15")
-        test_frame.pack(expand=True, fill="both")
+        # --- Resultado ---
+        self.result_label = ttk.Label(
+            main_frame,
+            text="",
+            style="Result.TLabel"
+        )
+        self.result_label.pack(pady=(0, 25))
 
-        self.load_button = ttk.Button(test_frame, text="Carregar Imagem", command=self.load_and_classify_image)
-        self.load_button.pack(pady=(0, 15))
-
-        self.image_label = ttk.Label(test_frame, text="Nenhuma imagem carregada", anchor="center")
-        self.image_label.pack(expand=True, fill="both", pady=5)
-
-        self.result_label = ttk.Label(test_frame, text="Resultado: -", font=("Helvetica", 12, "bold"), anchor="center")
-        self.result_label.pack(pady=(10, 0))
+        # --- Botões ---
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill="x")
+        
+        self.load_button = ttk.Button(
+            button_frame,
+            text="📁 Carregar Imagem",
+            command=self.load_and_classify_image
+        )
+        self.load_button.pack(side="left", padx=(0, 10), expand=True, fill="x")
+        
+        self.results_button = ttk.Button(
+            button_frame,
+            text="📊 Ver Resultados",
+            command=self.show_results
+        )
+        self.results_button.pack(side="right", expand=True, fill="x")
 
     def load_and_classify_image(self):
         """Abre um diálogo para o usuário selecionar uma imagem e a classifica."""
         filepath = filedialog.askopenfilename(
             title="Selecione uma imagem de ovo",
-            filetypes=[("Imagens", "*.jpg *.jpeg *.png"), ("Todos os arquivos", "*.*")]
+            filetypes=[
+                ("Imagens", "*.jpg *.jpeg *.png *.bmp"),
+                ("Todos os arquivos", "*.*")
+            ]
         )
         if not filepath:
+            return
+
+        # Exibe a imagem primeiro
+        success = self._display_image(filepath)
+        if not success:
+            self.result_label.config(text="✗ Erro ao carregar")
+            messagebox.showerror("Erro", "Não foi possível carregar a imagem.")
             return
 
         # Classifica a imagem
         prediction = self.classifier.classify(filepath)
         if prediction:
-            self.result_label.config(text=f"Resultado: {prediction}")
+            self.result_label.config(text=f"✓ {prediction}")
             self.logger.log(filepath, prediction)
-            messagebox.showinfo("Sucesso", f"A imagem foi classificada como: {prediction}")
         else:
-            self.result_label.config(text="Resultado: Erro na análise")
+            self.result_label.config(text="✗ Erro na análise")
             messagebox.showerror("Erro", "Não foi possível analisar a imagem.")
 
-        # Exibe a imagem na interface
-        self._display_image(filepath)
-
     def _display_image(self, filepath: str):
-        """Redimensiona e exibe a imagem selecionada na GUI."""
+        """
+        Redimensiona e exibe a imagem selecionada na GUI.
+        
+        Returns:
+            True se a imagem foi carregada com sucesso, False caso contrário.
+        """
         try:
+            # Abre a imagem
             pil_image = Image.open(filepath)
             
-            # Redimensiona a imagem para caber na label sem distorção
+            # Converte para RGB se necessário (ex: imagens RGBA)
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
+            
+            # Redimensiona mantendo proporção
             w, h = pil_image.size
             max_size = 200
+            
             if w > h:
                 new_w = max_size
                 new_h = int(h * (max_size / w))
@@ -244,11 +449,27 @@ class Application(tk.Tk):
             
             pil_image = pil_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
             
-            self.tk_image = ImageTk.PhotoImage(pil_image)
-            self.image_label.config(image=self.tk_image, text="")
+            # Converte para PhotoImage e mantém referência
+            self.current_image_ref = ImageTk.PhotoImage(pil_image)
+            
+            # Atualiza o label
+            self.image_label.config(image=self.current_image_ref, text="", bg="#f9f9f9")
+            
+            return True
+            
         except Exception as e:
-            self.image_label.config(text="Erro ao exibir imagem", image="")
             print(f"Erro ao exibir imagem: {e}")
+            self.image_label.config(
+                image="",
+                text="Erro ao\nexibir imagem",
+                fg="#d32f2f"
+            )
+            self.current_image_ref = None
+            return False
+    
+    def show_results(self):
+        """Abre uma janela separada para visualizar os resultados do CSV."""
+        ResultsViewer(self, self.logger)
 
 
 # --- Ponto de Entrada Principal ---
@@ -274,10 +495,17 @@ def main():
         app.mainloop()
 
     except RuntimeError as e:
+        # Cria uma janela temporária para mostrar o erro
+        root = tk.Tk()
+        root.withdraw()
         messagebox.showerror("Erro Crítico", str(e))
+        root.destroy()
         print(f"Erro: {e}")
     except Exception as e:
-        messagebox.showerror("Erro Inesperado", f"Ocorreu um erro inesperado: {e}")
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Erro Inesperado", f"Ocorreu um erro inesperado:\n\n{e}")
+        root.destroy()
         print(f"Erro: {e}")
 
 
